@@ -1,0 +1,8 @@
+{
+  "name": "knowledge-bridge-mobile",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Zotero cloud annotation links for Obsidian on mobile and desktop",
+  "scripts": {"build": "node build.cjs", "test": "node --test src/mobile.test.cjs"},
+  "devDependencies": {"esbuild": "0.28.2"}
+}
