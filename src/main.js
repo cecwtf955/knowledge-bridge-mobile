@@ -35,6 +35,7 @@ class Settings extends PluginSettingTab {
     this.containerEl.empty();
     this.containerEl.createEl('h2',{text:'知识桥 · 手机扩展'});
     this.containerEl.createEl('p',{text:'使用 Zotero 云端个人库，不需要电脑开机。请先在手机 Zotero 完成批注同步。'});
+    if(this.p.startupWarnings?.length)this.containerEl.createEl('p',{text:'启动诊断：'+this.p.startupWarnings.join('；')});
     new Setting(this.containerEl).setName('Zotero 连接').addButton(b=>b.setButtonText('连接 / 切换账号').onClick(()=>new Connect(this.p).open()));
     new Setting(this.containerEl).setName('同步仓库子目录').setDesc('若 Git 仓库放在 notes 子文件夹中，请填写 notes；直接打开 Git 仓库时留空。').addText(t=>t.setValue(this.p.settings.root).setPlaceholder('notes 或留空').onChange(async v=>{
       const root=v.trim();if(root&&(!/^[^\\:*?"<>|]+$/.test(root)||root.split('/').some(s=>!s||s==='.'||s==='..')))return;
@@ -46,11 +47,12 @@ class Settings extends PluginSettingTab {
 const Associate=require('./chooser');
 module.exports=class MobileBridge extends Plugin {
   async onload(){
+    this.disposed=false;this.startupWarnings=[];this.writeTokens=new Map();
     const saved=await this.loadData();
-    const autoRoot=Platform.isMobileApp&&await this.app.vault.adapter.exists('notes/.git')?'notes':'';
+    let autoRoot='';
+    if(saved?.root==null&&Platform.isMobileApp){try{if(await this.app.vault.adapter.exists('notes/.git'))autoRoot='notes';}catch{this.startupWarnings.push('无法自动检测同步目录，请在设置中填写 notes');}}
     this.settings={user:String(saved?.user||''),root:saved?.root??autoRoot};this.cloud=null;this.queue=Promise.resolve();this.writeTokens=new Map();
     Object.assign(this,require('./selection'));
-    this.installSelectionUI();
     this.addSettingTab(new Settings(this));
     this.addCommand({id:'connect',name:'连接 Zotero 云端',callback:()=>new Connect(this).open()});
     this.addCommand({id:'link-annotation',name:'从 Zotero 批注新建 / 关联笔记',callback:()=>this.browse()});
@@ -62,8 +64,9 @@ module.exports=class MobileBridge extends Plugin {
       if(params.action==='open'){this.openLinked(params.user,params.annotation).catch(e=>new Notice(e.message,12000));return;}
       if(params.annotation)this.openAnnotation(params.annotation);else this.browse();
     });
+    this.installSelectionUI();
   }
-  onunload(){this.cloud=null;this.writeTokens.clear();for(const bar of this.selectionBars?.values()||[])bar.remove();}
+  onunload(){this.disposed=true;this.cloud=null;this.writeTokens?.clear();for(const bar of this.selectionBars?.values()||[])bar.remove();}
   showAssociate(a){new Associate(this,a).open();}
   syncFiles(){return this.app.vault.getMarkdownFiles().filter(f=>!this.settings.root||f.path.startsWith(this.settings.root+'/'));}
   async openLinked(user,key){

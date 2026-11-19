@@ -318,11 +318,14 @@ var require_selection = __commonJS({
           menu.addItem((i) => i.setTitle("\u65B0\u5EFA / \u5173\u8054\u77E5\u8BC6\u70B9").setIcon("link").onClick(() => launch(editor, view)));
         }));
         const refresh = () => {
+          if (this.disposed) return;
           const active = /* @__PURE__ */ new Set();
           for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
             const view = leaf.view;
+            if (!view?.containerEl?.ownerDocument || !view?.contentEl?.before) continue;
             active.add(view);
-            if (this.selectionBars.has(view)) continue;
+            if (this.selectionBars.get(view)?.isConnected) continue;
+            this.selectionBars.get(view)?.remove();
             const bar = view.containerEl.ownerDocument.createElement("div");
             bar.className = "kbm-selection";
             const b = bar.createEl("button", { text: "\u9009\u533A \u2192 \u65B0\u5EFA / \u5173\u8054" });
@@ -353,8 +356,22 @@ var require_selection = __commonJS({
             this.selectionBars.delete(view);
           }
         };
-        this.registerEvent(this.app.workspace.on("layout-change", refresh));
-        this.app.workspace.onLayoutReady(refresh);
+        const safeRefresh = () => {
+          try {
+            refresh();
+          } catch (e) {
+            const message = "\u9009\u533A\u5DE5\u5177\u680F\uFF1A" + String(e.message || e);
+            this.startupWarnings || (this.startupWarnings = []);
+            if (!this.startupWarnings.includes(message)) {
+              this.startupWarnings.push(message);
+              new Notice2("\u77E5\u8BC6\u6865\u5DE5\u5177\u680F\u6682\u672A\u5C31\u7EEA\uFF1B\u53EF\u7528\u547D\u4EE4\u201C\u9009\u4E2D\u6587\u5B57\uFF1A\u65B0\u5EFA / \u5173\u8054\u77E5\u8BC6\u70B9\u201D\u3002\u8BCA\u65AD\u89C1\u63D2\u4EF6\u8BBE\u7F6E\u3002", 12e3);
+            }
+          }
+        };
+        this.registerEvent(this.app.workspace.on("layout-change", safeRefresh));
+        this.registerEvent(this.app.workspace.on("active-leaf-change", safeRefresh));
+        this.registerEvent(this.app.workspace.on("file-open", safeRefresh));
+        this.app.workspace.onLayoutReady(safeRefresh);
       }
     };
   }
@@ -428,6 +445,7 @@ var Settings = class extends PluginSettingTab {
     this.containerEl.empty();
     this.containerEl.createEl("h2", { text: "\u77E5\u8BC6\u6865 \xB7 \u624B\u673A\u6269\u5C55" });
     this.containerEl.createEl("p", { text: "\u4F7F\u7528 Zotero \u4E91\u7AEF\u4E2A\u4EBA\u5E93\uFF0C\u4E0D\u9700\u8981\u7535\u8111\u5F00\u673A\u3002\u8BF7\u5148\u5728\u624B\u673A Zotero \u5B8C\u6210\u6279\u6CE8\u540C\u6B65\u3002" });
+    if (this.p.startupWarnings?.length) this.containerEl.createEl("p", { text: "\u542F\u52A8\u8BCA\u65AD\uFF1A" + this.p.startupWarnings.join("\uFF1B") });
     new Setting(this.containerEl).setName("Zotero \u8FDE\u63A5").addButton((b) => b.setButtonText("\u8FDE\u63A5 / \u5207\u6362\u8D26\u53F7").onClick(() => new Connect(this.p).open()));
     new Setting(this.containerEl).setName("\u540C\u6B65\u4ED3\u5E93\u5B50\u76EE\u5F55").setDesc("\u82E5 Git \u4ED3\u5E93\u653E\u5728 notes \u5B50\u6587\u4EF6\u5939\u4E2D\uFF0C\u8BF7\u586B\u5199 notes\uFF1B\u76F4\u63A5\u6253\u5F00 Git \u4ED3\u5E93\u65F6\u7559\u7A7A\u3002").addText((t) => t.setValue(this.p.settings.root).setPlaceholder("notes \u6216\u7559\u7A7A").onChange(async (v) => {
       const root = v.trim();
@@ -444,14 +462,23 @@ var Settings = class extends PluginSettingTab {
 var Associate = require_chooser();
 module.exports = class MobileBridge extends Plugin {
   async onload() {
+    this.disposed = false;
+    this.startupWarnings = [];
+    this.writeTokens = /* @__PURE__ */ new Map();
     const saved = await this.loadData();
-    const autoRoot = Platform.isMobileApp && await this.app.vault.adapter.exists("notes/.git") ? "notes" : "";
+    let autoRoot = "";
+    if (saved?.root == null && Platform.isMobileApp) {
+      try {
+        if (await this.app.vault.adapter.exists("notes/.git")) autoRoot = "notes";
+      } catch {
+        this.startupWarnings.push("\u65E0\u6CD5\u81EA\u52A8\u68C0\u6D4B\u540C\u6B65\u76EE\u5F55\uFF0C\u8BF7\u5728\u8BBE\u7F6E\u4E2D\u586B\u5199 notes");
+      }
+    }
     this.settings = { user: String(saved?.user || ""), root: saved?.root ?? autoRoot };
     this.cloud = null;
     this.queue = Promise.resolve();
     this.writeTokens = /* @__PURE__ */ new Map();
     Object.assign(this, require_selection());
-    this.installSelectionUI();
     this.addSettingTab(new Settings(this));
     this.addCommand({ id: "connect", name: "\u8FDE\u63A5 Zotero \u4E91\u7AEF", callback: () => new Connect(this).open() });
     this.addCommand({ id: "link-annotation", name: "\u4ECE Zotero \u6279\u6CE8\u65B0\u5EFA / \u5173\u8054\u7B14\u8BB0", callback: () => this.browse() });
@@ -472,10 +499,12 @@ module.exports = class MobileBridge extends Plugin {
       if (params.annotation) this.openAnnotation(params.annotation);
       else this.browse();
     });
+    this.installSelectionUI();
   }
   onunload() {
+    this.disposed = true;
     this.cloud = null;
-    this.writeTokens.clear();
+    this.writeTokens?.clear();
     for (const bar of this.selectionBars?.values() || []) bar.remove();
   }
   showAssociate(a) {

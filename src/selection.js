@@ -60,9 +60,14 @@ module.exports={
     this.addCommand({id:'selection-create',name:'选中文字：新建 / 关联知识点',editorCallback:(editor,view)=>launch(editor,view)});
     this.registerEvent(this.app.workspace.on('editor-menu',(menu,editor,view)=>{if(!editor.getSelection()?.trim())return;menu.addItem(i=>i.setTitle('新建 / 关联知识点').setIcon('link').onClick(()=>launch(editor,view)));}));
     const refresh=()=>{
+      if(this.disposed)return;
       const active=new Set();
       for(const leaf of this.app.workspace.getLeavesOfType('markdown')){
-        const view=leaf.view;active.add(view);if(this.selectionBars.has(view))continue;
+        const view=leaf.view;
+        // Mobile can expose deferred/loading views during layout-ready. They are not editors yet.
+        if(!view?.containerEl?.ownerDocument||!view?.contentEl?.before)continue;
+        active.add(view);if(this.selectionBars.get(view)?.isConnected)continue;
+        this.selectionBars.get(view)?.remove();
         const bar=view.containerEl.ownerDocument.createElement('div');bar.className='kbm-selection';
         const b=bar.createEl('button',{text:'选区 → 新建 / 关联'});
         let selected;
@@ -73,6 +78,14 @@ module.exports={
       }
       for(const [view,bar] of this.selectionBars)if(!active.has(view)){bar.remove();this.selectionBars.delete(view);}
     };
-    this.registerEvent(this.app.workspace.on('layout-change',refresh));this.app.workspace.onLayoutReady(refresh);
+    const safeRefresh=()=>{try{refresh();}catch(e){
+      const message='选区工具栏：'+String(e.message||e);
+      this.startupWarnings ||= [];
+      if(!this.startupWarnings.includes(message)){this.startupWarnings.push(message);new Notice('知识桥工具栏暂未就绪；可用命令“选中文字：新建 / 关联知识点”。诊断见插件设置。',12000);}
+    }};
+    this.registerEvent(this.app.workspace.on('layout-change',safeRefresh));
+    this.registerEvent(this.app.workspace.on('active-leaf-change',safeRefresh));
+    this.registerEvent(this.app.workspace.on('file-open',safeRefresh));
+    this.app.workspace.onLayoutReady(safeRefresh);
   }
 };
