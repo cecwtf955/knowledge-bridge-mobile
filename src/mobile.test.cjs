@@ -6,14 +6,16 @@ const core=require('./core');
 const data={itemType:'annotation',key:'ABCDEFGH',parentItem:'JKLMNPQR',annotationPosition:'{"pageIndex":2}',annotationText:'hello\nworld'};
 const a=core.annotation(data);
 class TFile {constructor(path){this.path=path;}}
-const mock={Plugin:class{},PluginSettingTab:class{},Modal:class{},Setting:class{},FuzzySuggestModal:class{},Notice:class{},TFile};
-const sandbox={module:{exports:{}},require:n=>n==='obsidian'?mock:n==='./core'?core:(()=>{throw Error('Desktop dependency: '+n)})(),globalThis:{crypto:require('node:crypto').webcrypto}};
+class TFolder {}
+const mock={TFolder,Plugin:class{},PluginSettingTab:class{},Modal:class{},Setting:class{},FuzzySuggestModal:class{},Notice:class{},TFile};
+const sandbox={module:{exports:{}},require:n=>n==='obsidian'?mock:n==='./core'?core:n==='./chooser'?class {}:(()=>{throw Error('Desktop dependency: '+n)})(),globalThis:{crypto:require('node:crypto').webcrypto}};
 vm.runInNewContext(fs.readFileSync(__dirname+'/main.js','utf8'),sandbox);
 const Mobile=sandbox.module.exports;
+const selectionBox={module:{exports:{}},require:n=>mock,globalThis:{crypto:require('node:crypto').webcrypto}};vm.runInNewContext(fs.readFileSync(__dirname+'/selection.js','utf8'),selectionBox);const selection=selectionBox.module.exports;
 function instance(){
- const p=new Mobile(),files=new Map(),contents=new Map();
+ const p=new Mobile();Object.assign(p,selection);const files=new Map(),contents=new Map();
  const vault={getMarkdownFiles:()=>[...files.values()].filter(f=>f instanceof TFile),getAbstractFileByPath:k=>files.get(k),cachedRead:async f=>contents.get(f.path),
- getName:()=> '我的笔记',createFolder:async k=>files.set(k,{}),
+ read:async f=>contents.get(f.path),getName:()=> '我的笔记',createFolder:async k=>files.set(k,{}),
  create:async(k,s)=>{assert(!files.has(k));const f=new TFile(k);files.set(k,f);contents.set(k,s);return f;},
  process:async(f,cb)=>contents.set(f.path,cb(contents.get(f.path)))};
  p.app={vault};p.settings={root:''};p.queue=Promise.resolve();p.writeTokens=new Map();p.cloud={user:'123',backlink:async()=> 'STUVWXYZ'};
@@ -60,3 +62,17 @@ test('existing Zotero return note avoids duplicate write',async()=>{
 test('stable return link resolves without cloud or original file path',async()=>{const {p,vault}=instance();const f=await vault.create('renamed.md',core.block('123',a));let opened;p.cloud=null;p.app.workspace={getLeaf:()=>({openFile:async file=>opened=file})};await p.openLinked('123',a.key);assert.equal(opened,f);});
 test('stable return link respects account identity',async()=>{const {p,vault}=instance();await vault.create('other.md',core.block('456',a));await assert.rejects(p.openLinked('123',a.key),/尚未找到/);});
 test('stable return link rejects ambiguous copies',async()=>{const {p,vault}=instance();await vault.create('one.md',core.block('123',a));await vault.create('two.md',core.block('123',a));await assert.rejects(p.openLinked('123',a.key),/重复/);});
+test('folder mode creates default note at chosen nested location',async()=>{const {p,vault}=instance();p.settings.root='notes';await vault.createFolder('notes');await vault.createFolder('notes/Research');const r=await p.associate(a,'Idea',null,false,{folder:'notes/Research',kind:'folder'});assert.equal(r.file.path,'notes/Research/Idea/默认.md');});
+test('chosen root does not silently use legacy default folder',async()=>{const {p}=instance();const r=await p.associate(a,'Idea',null,false,{folder:'',kind:'note'});assert.equal(r.file.path,'Idea.md');});
+test('chosen missing directory fails before creating note',async()=>{const {p,vault}=instance();await assert.rejects(p.associate(a,'Idea',null,false,{folder:'missing',kind:'note'}),/已移动/);assert.equal(vault.getMarkdownFiles().length,0);});
+async function sourceFixture(){
+ const f=instance(),{p,vault}=f;const source=await vault.create('source.md','first alpha and second alpha');const backups=new Map();
+ vault.configDir='.obsidian';vault.adapter={exists:async path=>backups.has(path),mkdir:async path=>backups.set(path,''),write:async(path,s)=>backups.set(path,s)};p.manifest={id:'knowledge-bridge-mobile'};
+ const request={id:'12345678-1234-1234-1234-123456789abc',quote:'alpha',origin:{file:source.path,start:23,end:28,quote:'alpha',text:'first alpha and second alpha'}};
+ return {...f,source,request,backups};
+}
+test('Obsidian selection links exact second occurrence with backup',async()=>{const {p,contents,request,backups}=await sourceFixture();const r=await p.associateSource(request,'target',null,{folder:'',kind:'note'});assert(r.ok);assert(contents.get('source.md').startsWith('first alpha and second <!-- kbm-source:'));assert(contents.get(r.file.path).includes('返回 Obsidian 原句'));assert([...backups.values()].includes(request.origin.text));});
+test('Obsidian folder flow and repeat reuses linked target',async()=>{const {p,vault,request}=await sourceFixture();const r=await p.associateSource(request,'Folder',null,{folder:'',kind:'folder'});const again=await p.associateSource(request,'Folder',null,{folder:'',kind:'folder'});assert.equal(r.file.path,'Folder/默认.md');assert.equal(again.file,r.file);assert.equal(vault.getMarkdownFiles().length,2);});
+test('changed source refuses mutation before creating target',async()=>{const {p,vault,contents,request}=await sourceFixture();contents.set('source.md','edited');await assert.rejects(p.associateSource(request,'target',null,{folder:'',kind:'note'}),/已变化/);assert.equal(vault.getMarkdownFiles().length,1);});
+test('existing target content preserved in Obsidian selection flow',async()=>{const {p,vault,contents,request}=await sourceFixture();const target=await vault.create('target.md','keep me');await p.associateSource(request,'',target,{folder:'',kind:'note'});assert(contents.get('target.md').startsWith('keep me'));});
+test('self association rejected',async()=>{const {p,source,request}=await sourceFixture();await assert.rejects(p.associateSource(request,'',source,{folder:'',kind:'note'}),/以外/);});

@@ -1,0 +1,9 @@
+.kbm-modes { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+.kbm-modes button,.kbm-entry,.kbm-submit,.kbm-browser>button { min-height:44px; height:auto; white-space:normal; }
+.kbm-entries { max-height:35vh; overflow:auto; margin:10px 0; }
+.kbm-entry { display:block; width:100%; text-align:left; margin:6px 0; overflow-wrap:anywhere; }
+.kbm-location { overflow-wrap:anywhere; }
+.kbm-submit { width:100%; margin:8px 0; }
+.kbm-chooser blockquote { max-height:16vh; overflow:auto; }
+.kbm-selection { display:flex; flex-wrap:wrap; gap:8px; padding:6px; border-bottom:1px solid var(--background-modifier-border); }
+.kbm-selection button { min-height:40px; height:auto; }

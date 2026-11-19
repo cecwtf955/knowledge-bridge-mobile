@@ -2,17 +2,28 @@
 
 在 Obsidian 中读取 Zotero 云端 PDF 批注，新建或关联笔记，并在 Zotero 父文献下添加返回 Obsidian 的链接。电脑关机时也可以在手机独立使用，需要联网和 Zotero 数据同步。
 
-这是桌面知识桥的独立扩展，插件 ID 为 `knowledge-bridge-mobile`，可与原桌面版并存。适配代码已完成，0.1.1 仍为待 iPhone 实机验收的预览版；24 项模拟自动化测试通过不代表真机验收。
+这是桌面知识桥的独立扩展，插件 ID 为 `knowledge-bridge-mobile`，可与原桌面版并存。新增流程已实现，0.2.0 仍为待 iPhone 实机验收的预览版；32 项模拟自动化测试通过不代表真机验收。
 
 ## 通过 BRAT 安装
 
 1. 在 Obsidian 社区插件市场安装并启用 BRAT。
 2. 打开 BRAT 设置，选择 **Add Beta plugin**。
-3. 填入本仓库地址，选择版本 `0.1.1`（或 Latest），添加并启用。
+3. 填入本仓库地址，选择版本 `0.2.0`（或 Latest），添加并启用。
 4. 在“知识桥手机扩展”设置中检查“同步仓库子目录”。若 Git 克隆在 `notes` 子目录，填写 `notes`；直接打开仓库时留空。
 5. 点击“连接 Zotero”，填写数字用户 ID 和 API 密钥。
 
-Zotero 密钥设置：[Settings → Feeds/API](https://www.zotero.org/settings/keys)。读取批注需要个人库读取权限，添加返回链接需要个人库写入权限。不需要群组权限。密钥只驻留本次运行内存，不保存到插件配置或笔记，重载插件后需要重新输入。
+Zotero 密钥设置：[Settings → Feeds/API](https://www.zotero.org/settings/keys)。需启用个人库 library access、notes access 和 write access，以读取批注、检查重复笔记和添加返回链接。不需要群组权限。密钥只驻留本次运行内存，不保存到插件配置或笔记，重载插件后需要重新输入。
+
+## 0.2.0 的创建流程
+
+- 同一窗口使用“新建笔记 / 新建文件夹 / 关联已有笔记”三个按钮切换，不再弹出全库长路径选择器。
+- 逐层点击文件夹进入目标位置，使用“上一级”返回；新建文件夹内用“默认.md”承载关联。
+- Obsidian 编辑模式选中文字后，点击编辑器上方“选区 → 新建 / 关联”，或使用编辑器选区菜单、同名命令；可添加到手机工具栏。
+- 阅读模式仅对能在原 Markdown 中唯一匹配的选区提供创建；含排版或重复文本时需切换编辑模式。
+- 创建 Obsidian 选区关联时保留一次该操作的原文备份，再把选区改为可点击的高亮链接；新目标带“返回 Obsidian 原句”。备份位于设备插件目录的 source-backups。
+- 电脑与手机在此扩展中使用同一创建界面。旧桌面知识桥的 Word/Excel 功能与旧链接继续由旧插件处理，尚未迁移到这套新界面。
+- iOS Zotero 原生选中文字菜单无法加入本插件按钮；Zotero 来源仍需高亮、同步后进入 Obsidian 选择批注，不能宣称与电脑 Zotero 的入口完全一致。
+- 32 项数据流程测试及手机/桌面尺寸的模拟 DOM 点击测试已通过；尚未完成新版本的真实 iPhone 验收。
 
 ## 使用
 
@@ -47,7 +58,7 @@ npm test
 npm run build
 ```
 
-发布附件为 `main.js` 和 `manifest.json`。仓库根目录 manifest 版本需与 GitHub release tag 一致。
+发布附件为 `main.js`、`manifest.json` 和 `styles.css`。仓库根目录 manifest 版本需与 GitHub release tag 一致。
 
 ## 接口依据
 

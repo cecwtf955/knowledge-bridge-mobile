@@ -1,4 +1,4 @@
-const {Plugin,PluginSettingTab,Modal,Setting,FuzzySuggestModal,Notice,TFile,requestUrl,Platform}=require('obsidian');
+const {Plugin,PluginSettingTab,Modal,Setting,FuzzySuggestModal,Notice,TFile,TFolder,requestUrl,Platform}=require('obsidian');
 const {Cloud,annotation,marker,block}=require('./core');
 
 class Pick extends FuzzySuggestModal {
@@ -43,36 +43,14 @@ class Settings extends PluginSettingTab {
     new Setting(this.containerEl).setName('断开连接').addButton(b=>b.setButtonText('清除内存中的密钥').onClick(()=>{this.p.cloud=null;new Notice('已断开');}));
   }
 }
-class Associate extends Modal {
-  constructor(p,a){super(p.app);this.p=p;this.a=a;this.title='';this.target=null;this.reverse=true;}
-  onOpen(){
-    this.titleEl.setText('关联 Zotero 批注');
-    this.contentEl.createEl('blockquote',{text:this.a.quote});
-    this.contentEl.createEl('p',{text:'PDF 第 '+this.a.page+' 页；批注 '+this.a.key});
-    new Setting(this.contentEl).setName('新笔记名称').setDesc('保存在 '+(this.p.settings.root?this.p.settings.root+'/':'')+'知识桥手机，也可选择已有笔记。').addText(t=>t.setPlaceholder('留空使用批注编号').onChange(v=>this.title=v));
-    const selected=this.contentEl.createEl('p',{text:'目标：新建笔记'});
-    new Setting(this.contentEl).setName('关联已有笔记').addButton(b=>b.setButtonText('选择').onClick(()=>new Pick(this.app,this.p.syncFiles(),f=>f.path,f=>{this.target=f;selected.setText('目标：'+f.path);}).open()))
-      .addButton(b=>b.setButtonText('改为新建').onClick(()=>{this.target=null;selected.setText('目标：新建笔记');}));
-    new Setting(this.contentEl).setName('在 Zotero 添加返回链接').setDesc('在父文献下新增一条知识桥笔记，供手机 Zotero 跳回 Obsidian。').addToggle(t=>t.setValue(true).onChange(v=>this.reverse=v));
-    const status=this.contentEl.createEl('p');
-    new Setting(this.contentEl).addButton(b=>b.setButtonText('建立关联').setCta().onClick(async()=>{
-      b.setDisabled(true);
-      try{
-        if(!this.p.cloud)throw Error('请先重新连接 Zotero');
-        const result=await this.p.associate(this.a,this.title,this.target,this.reverse);
-        status.setText(result.message);
-        await this.app.workspace.getLeaf(false).openFile(result.file);
-        if(result.ok){new Notice(result.message);this.close();}
-      }catch(e){status.setText(e.message);}finally{b.setDisabled(false);}
-    }));
-  }
-  onClose(){this.contentEl.empty();}
-}
+const Associate=require('./chooser');
 module.exports=class MobileBridge extends Plugin {
   async onload(){
     const saved=await this.loadData();
     const autoRoot=Platform.isMobileApp&&await this.app.vault.adapter.exists('notes/.git')?'notes':'';
     this.settings={user:String(saved?.user||''),root:saved?.root??autoRoot};this.cloud=null;this.queue=Promise.resolve();this.writeTokens=new Map();
+    Object.assign(this,require('./selection'));
+    this.installSelectionUI();
     this.addSettingTab(new Settings(this));
     this.addCommand({id:'connect',name:'连接 Zotero 云端',callback:()=>new Connect(this).open()});
     this.addCommand({id:'link-annotation',name:'从 Zotero 批注新建 / 关联笔记',callback:()=>this.browse()});
@@ -80,11 +58,13 @@ module.exports=class MobileBridge extends Plugin {
     this.registerObsidianProtocolHandler('knowledge-bridge-mobile',params=>{
       if(params.vault&&params.vault!==this.app.vault.getName()){new Notice('请先打开笔记库：'+params.vault);return;}
       // Navigation only: opening a URI never mutates notes or makes API writes.
+      if(params.action==='selection'){this.openSourceLink(params.id,params.side).catch(e=>new Notice(e.message,12000));return;}
       if(params.action==='open'){this.openLinked(params.user,params.annotation).catch(e=>new Notice(e.message,12000));return;}
       if(params.annotation)this.openAnnotation(params.annotation);else this.browse();
     });
   }
-  onunload(){this.cloud=null;this.writeTokens.clear();}
+  onunload(){this.cloud=null;this.writeTokens.clear();for(const bar of this.selectionBars?.values()||[])bar.remove();}
+  showAssociate(a){new Associate(this,a).open();}
   syncFiles(){return this.app.vault.getMarkdownFiles().filter(f=>!this.settings.root||f.path.startsWith(this.settings.root+'/'));}
   async openLinked(user,key){
     const tag=marker(user,{key}),matches=[];
@@ -105,13 +85,30 @@ module.exports=class MobileBridge extends Plugin {
       new Pick(this.app,valid,a=>`第 ${a.page} 页 · ${a.quote.slice(0,160)} · ${a.key}`,a=>new Associate(this,a).open()).open();
     }catch(e){new Notice(e.message,12000);}
   }
-  associate(a,title,target,reverse){
+  associate(a,title,target,reverse,options){
     // Serialize mutations even when two dialogs are open.
     const cloud=this.cloud;
-    const task=this.queue.catch(()=>{}).then(()=>this.doAssociate(cloud,a,title,target,reverse));
+    const task=this.queue.catch(()=>{}).then(()=>this.doAssociate(cloud,a,title,target,reverse,options));
     this.queue=task;return task;
   }
-  async doAssociate(cloud,a,title,target,reverse){
+  async createDestination(title,content,options){
+    const vault=this.app.vault,root=this.settings.root||'';
+    title=title.trim()||'未命名';
+    if(/[\\/:*?"<>|\r\n]/.test(title)||title.length>100||title.endsWith('.')||/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(title))throw Error('笔记名称无效');
+    const folder=options?.folder??((root?root+'/':'')+'知识桥手机');
+    if(root&&folder!==root&&!folder.startsWith(root+'/'))throw Error('位置不在同步目录内');
+    if(folder.split('/').some(s=>s==='.'||s==='..')||folder.startsWith('/')||folder.includes('\\'))throw Error('无效位置');
+    if(folder&&!vault.getAbstractFileByPath(folder)){
+      if(options)throw Error('所选文件夹已移动，请重新选择');
+      await vault.createFolder(folder);
+    }
+    const isFolder=options?.kind==='folder',prefix=folder?folder+'/':'';
+    let path=prefix+title+(isFolder?'':'.md'),n=1;
+    while(vault.getAbstractFileByPath(path))path=prefix+title+' '+(n++)+(isFolder?'':'.md');
+    if(isFolder){await vault.createFolder(path);path+='/默认.md';}
+    return vault.create(path,content);
+  }
+  async doAssociate(cloud,a,title,target,reverse,options){
     if(!cloud)throw Error('请先连接 Zotero');
     const vault=this.app.vault,tag=marker(cloud.user,a),matches=[];
     if(this.settings.root&&!vault.getAbstractFileByPath(this.settings.root))throw Error('同步子目录不存在，请检查知识桥手机扩展设置：'+this.settings.root);
@@ -128,13 +125,7 @@ module.exports=class MobileBridge extends Plugin {
       await vault.process(target,text=>text.includes(tag)||text.includes(']('+a.pdf+')')?text:text+'\n\n'+block(cloud.user,a));file=target;
     }
     if(!file){
-      title=title.trim()||('批注-'+a.key);
-      if(/[\\/:*?"<>|\r\n]/.test(title)||title.length>100||title.endsWith('.')||/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(title))throw Error('笔记名称无效');
-      const folder=(this.settings.root?this.settings.root+'/':'')+'知识桥手机';
-      if(!vault.getAbstractFileByPath(folder))await vault.createFolder(folder);
-      let path=folder+'/'+title+'.md',n=1;
-      while(vault.getAbstractFileByPath(path))path=folder+'/'+title+' '+n+++'.md';
-      file=await vault.create(path,block(cloud.user,a));
+      file=await this.createDestination(title||('批注-'+a.key),block(cloud.user,a),options);
     }
     // Carry identity inside the synced note; do not depend on device-specific paths.
     await vault.process(file,text=>text.includes(tag)?text:text+'\n\n'+tag+'\n');
