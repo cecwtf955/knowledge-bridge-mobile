@@ -34,7 +34,8 @@ class Cloud {
     const delay=Number(h.backoff||h['retry-after']||0);
     if(delay>0)this.until=Date.now()+delay*1000;
     if(r.status===429){this.until=Math.max(this.until,Date.now()+60000);throw Error('Zotero 请求过于频繁，请稍后重试');}
-    if(r.status===401||r.status===403)throw Error('Zotero 密钥无效或权限不足；建立返回链接需要个人库写入权限');
+    if(r.status===401)throw Error('Zotero 密钥无效或已撤销，请重新连接');
+    if(r.status===403)throw Error(method==='GET'?'Zotero 读取权限不足，请为密钥开启 Allow library access 和 Allow notes access':'Zotero 写入权限不足，请为密钥开启 Allow write access');
     if(r.status<200||r.status>=300)throw Error('Zotero 请求未完成（HTTP '+r.status+'），可稍后重试');
     return r.json;
   }

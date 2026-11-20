@@ -24,7 +24,7 @@ module.exports={
     for(const f of this.syncFiles())if((await this.app.vault.cachedRead(f)).includes(token))matches.push(f);
     if(matches.length!==1)throw Error(matches.length?'存在重复的关联笔记，请先整理':'未找到关联，请打开正确的笔记库并同步后重试');
     const file=matches[0],text=await this.app.vault.read(file),offset=text.indexOf(token),line=text.slice(0,offset).split('\n').length-1;
-    await this.app.workspace.getLeaf(false).openFile(file,{eState:{line}});
+    await this.openVisible(file,{eState:{line}});
   },
   associateSource(a,title,target,options){
     const task=this.queue.catch(()=>{}).then(()=>this.doAssociateSource(a,title,target,options));this.queue=task;return task;

@@ -72,7 +72,8 @@ ${a.quote.replace(/\r/g, "").split("\n").map((s) => "> " + s).join("\n")}
           this.until = Math.max(this.until, Date.now() + 6e4);
           throw Error("Zotero \u8BF7\u6C42\u8FC7\u4E8E\u9891\u7E41\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
         }
-        if (r.status === 401 || r.status === 403) throw Error("Zotero \u5BC6\u94A5\u65E0\u6548\u6216\u6743\u9650\u4E0D\u8DB3\uFF1B\u5EFA\u7ACB\u8FD4\u56DE\u94FE\u63A5\u9700\u8981\u4E2A\u4EBA\u5E93\u5199\u5165\u6743\u9650");
+        if (r.status === 401) throw Error("Zotero \u5BC6\u94A5\u65E0\u6548\u6216\u5DF2\u64A4\u9500\uFF0C\u8BF7\u91CD\u65B0\u8FDE\u63A5");
+        if (r.status === 403) throw Error(method === "GET" ? "Zotero \u8BFB\u53D6\u6743\u9650\u4E0D\u8DB3\uFF0C\u8BF7\u4E3A\u5BC6\u94A5\u5F00\u542F Allow library access \u548C Allow notes access" : "Zotero \u5199\u5165\u6743\u9650\u4E0D\u8DB3\uFF0C\u8BF7\u4E3A\u5BC6\u94A5\u5F00\u542F Allow write access");
         if (r.status < 200 || r.status >= 300) throw Error("Zotero \u8BF7\u6C42\u672A\u5B8C\u6210\uFF08HTTP " + r.status + "\uFF09\uFF0C\u53EF\u7A0D\u540E\u91CD\u8BD5");
         return r.json;
       }
@@ -208,12 +209,18 @@ var require_chooser = __commonJS({
         this.busy = true;
         this.render();
         try {
-          const options = { folder: this.folder, kind: this.mode === "folder" ? "folder" : "note" };
-          const result = this.a.origin ? await this.p.associateSource(this.a, this.title, this.target, options) : await this.p.associate(this.a, this.title, this.target, this.reverse, options);
-          if (result.ok) {
-            await this.app.workspace.getLeaf(false).openFile(result.file);
-            new Notice2(result.message);
+          let opened = false;
+          const openSaved = async (file) => {
+            await this.p.openVisible(file);
+            opened = true;
             this.close();
+            new Notice2("\u5DF2\u6253\u5F00\uFF1A" + file.path + (this.reverse ? "\n\u6B63\u5728\u6DFB\u52A0 Zotero \u8FD4\u56DE\u94FE\u63A5\u2026" : ""), 1e4);
+          };
+          const options = { folder: this.folder, kind: this.mode === "folder" ? "folder" : "note", onLocalSaved: openSaved };
+          const result = this.a.origin ? await this.p.associateSource(this.a, this.title, this.target, options) : await this.p.associate(this.a, this.title, this.target, this.reverse, options);
+          if (result.file) {
+            if (!opened) await openSaved(result.file);
+            new Notice2(result.message, result.ok ? 1e4 : 3e4);
           } else {
             this.busy = false;
             this.render();
@@ -262,7 +269,7 @@ var require_selection = __commonJS({
         for (const f of this.syncFiles()) if ((await this.app.vault.cachedRead(f)).includes(token)) matches.push(f);
         if (matches.length !== 1) throw Error(matches.length ? "\u5B58\u5728\u91CD\u590D\u7684\u5173\u8054\u7B14\u8BB0\uFF0C\u8BF7\u5148\u6574\u7406" : "\u672A\u627E\u5230\u5173\u8054\uFF0C\u8BF7\u6253\u5F00\u6B63\u786E\u7684\u7B14\u8BB0\u5E93\u5E76\u540C\u6B65\u540E\u91CD\u8BD5");
         const file = matches[0], text = await this.app.vault.read(file), offset = text.indexOf(token), line = text.slice(0, offset).split("\n").length - 1;
-        await this.app.workspace.getLeaf(false).openFile(file, { eState: { line } });
+        await this.openVisible(file, { eState: { line } });
       },
       associateSource(a, title, target, options) {
         const task = this.queue.catch(() => {
@@ -513,11 +520,21 @@ module.exports = class MobileBridge extends Plugin {
   syncFiles() {
     return this.app.vault.getMarkdownFiles().filter((f) => !this.settings.root || f.path.startsWith(this.settings.root + "/"));
   }
+  async openVisible(file, state = {}) {
+    const w = this.app.workspace, leaf = w.getLeaf(false);
+    await leaf.openFile(file, { active: true, ...state });
+    if (w.revealLeaf) await w.revealLeaf(leaf);
+    if (Platform?.isMobileApp) {
+      w.leftSplit?.collapse?.();
+      w.rightSplit?.collapse?.();
+    }
+  }
   async openLinked(user, key) {
     const tag = marker(user, { key }), matches = [];
     for (const f of this.syncFiles()) if ((await this.app.vault.cachedRead(f)).includes(tag)) matches.push(f);
     if (matches.length !== 1) throw Error(matches.length ? "\u53D1\u73B0\u91CD\u590D\u5173\u8054\uFF0C\u8BF7\u5148\u6574\u7406\u7B14\u8BB0" : "\u5F53\u524D\u7B14\u8BB0\u5E93\u5C1A\u672A\u627E\u5230\u5173\u8054\uFF0C\u8BF7\u6253\u5F00\u6B63\u786E\u7684\u5E93\u5E76\u5B8C\u6210 Git Pull \u540E\u91CD\u8BD5");
-    await this.app.workspace.getLeaf(false).openFile(matches[0]);
+    const text = await this.app.vault.cachedRead(matches[0]);
+    await this.openVisible(matches[0], { eState: { line: text.slice(0, text.indexOf(tag)).split("\n").length - 1 } });
   }
   async openAnnotation(k) {
     if (!this.cloud) {
@@ -600,6 +617,7 @@ module.exports = class MobileBridge extends Plugin {
       file = await this.createDestination(title || "\u6279\u6CE8-" + a.key, block(cloud.user, a), options);
     }
     await vault.process(file, (text) => text.includes(tag) ? text : text + "\n\n" + tag + "\n");
+    if (options?.onLocalSaved) await options.onLocalSaved(file);
     if (!reverse) return { file, ok: true, message: "\u5DF2\u5EFA\u7ACB\u672C\u5730\u5173\u8054\uFF0C\u53EF\u4ECE\u7B14\u8BB0\u8FD4\u56DE Zotero PDF" };
     try {
       const id = tag + file.path;
@@ -607,7 +625,7 @@ module.exports = class MobileBridge extends Plugin {
       await cloud.backlink(a, vault.getName(), file.path, this.writeTokens.get(id));
       return { file, ok: true, message: "\u53CC\u5411\u5173\u8054\u5DF2\u5EFA\u7ACB\uFF1B\u8BF7\u5728 Zotero \u540C\u6B65\u540E\u6253\u5F00\u7236\u6587\u732E\u4E0B\u7684\u77E5\u8BC6\u6865\u7B14\u8BB0" };
     } catch (e) {
-      return { file, ok: false, message: "\u672C\u5730\u5173\u8054\u5DF2\u4FDD\u5B58\uFF1A" + file.path + "\u3002Zotero \u8FD4\u56DE\u94FE\u63A5\u5C1A\u672A\u786E\u8BA4\uFF1A" + e.message + "\u3002\u518D\u6B21\u70B9\u51FB\u201C\u5EFA\u7ACB\u5173\u8054\u201D\u4F1A\u590D\u7528\u672C\u5730\u7B14\u8BB0\u3002" };
+      return { file, ok: false, message: "\u7B14\u8BB0\u5DF2\u4FDD\u5B58\u5E76\u4FDD\u7559\uFF1A" + file.path + "\u3002Zotero \u8FD4\u56DE\u94FE\u63A5\u672A\u5B8C\u6210\uFF1A" + e.message + "\u3002\u4FEE\u590D\u8FDE\u63A5\u540E\u518D\u6B21\u9009\u62E9\u540C\u4E00\u6279\u6CE8\u5373\u53EF\u91CD\u8BD5\uFF0C\u4E0D\u4F1A\u91CD\u590D\u521B\u5EFA\u3002" };
     }
   }
 };

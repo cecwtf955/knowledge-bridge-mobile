@@ -7,7 +7,7 @@ const data={itemType:'annotation',key:'ABCDEFGH',parentItem:'JKLMNPQR',annotatio
 const a=core.annotation(data);
 class TFile {constructor(path){this.path=path;}}
 class TFolder {}
-const mock={TFolder,Plugin:class{},PluginSettingTab:class{},Modal:class{},Setting:class{},FuzzySuggestModal:class{},Notice:class{},TFile};
+const mock={Platform:{isMobileApp:true},TFolder,Plugin:class{},PluginSettingTab:class{},Modal:class{},Setting:class{},FuzzySuggestModal:class{},Notice:class{},TFile};
 const sandbox={module:{exports:{}},require:n=>n==='obsidian'?mock:n==='./core'?core:n==='./chooser'?class {}:(()=>{throw Error('Desktop dependency: '+n)})(),globalThis:{crypto:require('node:crypto').webcrypto}};
 vm.runInNewContext(fs.readFileSync(__dirname+'/main.js','utf8'),sandbox);
 const Mobile=sandbox.module.exports;
@@ -76,3 +76,31 @@ test('Obsidian folder flow and repeat reuses linked target',async()=>{const {p,v
 test('changed source refuses mutation before creating target',async()=>{const {p,vault,contents,request}=await sourceFixture();contents.set('source.md','edited');await assert.rejects(p.associateSource(request,'target',null,{folder:'',kind:'note'}),/已变化/);assert.equal(vault.getMarkdownFiles().length,1);});
 test('existing target content preserved in Obsidian selection flow',async()=>{const {p,vault,contents,request}=await sourceFixture();const target=await vault.create('target.md','keep me');await p.associateSource(request,'',target,{folder:'',kind:'note'});assert(contents.get('target.md').startsWith('keep me'));});
 test('self association rejected',async()=>{const {p,source,request}=await sourceFixture();await assert.rejects(p.associateSource(request,'',source,{folder:'',kind:'note'}),/以外/);});
+
+test('local note is visible before slow cloud write completes and survives denial',async()=>{
+ const {p,vault}=instance();let release,opened=false;
+ p.cloud.backlink=()=>new Promise((resolve,reject)=>{release=()=>reject(Error('403'));});
+ const pending=p.associate(a,'Immediate',null,true,{folder:'',kind:'note',onLocalSaved:async file=>{assert.equal(file.path,'Immediate.md');opened=true;}});
+ while(!release)await new Promise(resolve=>setImmediate(resolve));
+ assert(opened);assert.equal(vault.getMarkdownFiles().length,1);release();
+ const result=await pending;assert.equal(result.ok,false);assert.equal(result.file.path,'Immediate.md');
+});
+test('opening on mobile activates note and collapses both covering drawers',async()=>{
+ const {p,vault}=instance(),events=[],f=await vault.create('notes/test.md','text');
+ const leaf={openFile:async(file,state)=>{assert.equal(file,f);assert.equal(state.active,true);events.push('open');}};
+ p.app.workspace={getLeaf:()=>leaf,revealLeaf:async l=>{assert.equal(l,leaf);events.push('reveal');},leftSplit:{collapse:()=>events.push('left')},rightSplit:{collapse:()=>events.push('right')}};
+ await p.openVisible(f);assert.deepEqual(events,['open','reveal','left','right']);
+});
+test('chooser opens saved note even when backlink result is failure',async()=>{
+ const box={module:{exports:{}},require:()=>mock};vm.runInNewContext(fs.readFileSync(__dirname+'/chooser.js','utf8'),box);
+ const dialog=new box.module.exports({app:{},settings:{root:''}},a);let opened=false,closed=false;
+ dialog.render=()=>{};dialog.close=()=>closed=true;dialog.status={setText:s=>assert.fail(s)};
+ dialog.p.associate=async()=>({file:{path:'saved.md'},ok:false,message:'cloud denied'});
+ dialog.p.openVisible=async f=>{assert.equal(f.path,'saved.md');opened=true;};
+ await dialog.run();assert(opened);assert(closed);
+});
+test('read denial and write denial identify different missing permissions',async()=>{
+ const c=new core.Cloud(async()=>({status:403}),'123','x');
+ await assert.rejects(c.call('/users/123/items'),/Allow notes access/);
+ await assert.rejects(c.call('/users/123/items','POST',[]),/Allow write access/);
+});

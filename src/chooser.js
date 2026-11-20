@@ -48,9 +48,14 @@ class Associate extends Modal {
   async run(){
     if(this.busy)return;this.busy=true;this.render();
     try{
-      const options={folder:this.folder,kind:this.mode==='folder'?'folder':'note'};
+      let opened=false;
+      const openSaved=async file=>{
+        await this.p.openVisible(file);opened=true;this.close();
+        new Notice('已打开：'+file.path+(this.reverse?'\n正在添加 Zotero 返回链接…':''),10000);
+      };
+      const options={folder:this.folder,kind:this.mode==='folder'?'folder':'note',onLocalSaved:openSaved};
       const result=this.a.origin?await this.p.associateSource(this.a,this.title,this.target,options):await this.p.associate(this.a,this.title,this.target,this.reverse,options);
-      if(result.ok){await this.app.workspace.getLeaf(false).openFile(result.file);new Notice(result.message);this.close();}
+      if(result.file){if(!opened)await openSaved(result.file);new Notice(result.message,result.ok?10000:30000);}
       else {this.busy=false;this.render();this.status.setText(result.message);}
     }catch(e){this.busy=false;this.render();this.status.setText(e.message);}
   }

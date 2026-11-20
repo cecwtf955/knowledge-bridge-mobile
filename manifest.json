@@ -1,7 +1,7 @@
 {
   "id": "knowledge-bridge-mobile",
   "name": "Knowledge Bridge Mobile / 知识桥手机扩展",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "minAppVersion": "1.5.0",
   "description": "Connect synced Zotero PDF annotations with Obsidian notes without a running desktop. Personal library preview.",
   "author": "Local custom plugin",

@@ -69,11 +69,18 @@ module.exports=class MobileBridge extends Plugin {
   onunload(){this.disposed=true;this.cloud=null;this.writeTokens?.clear();for(const bar of this.selectionBars?.values()||[])bar.remove();}
   showAssociate(a){new Associate(this,a).open();}
   syncFiles(){return this.app.vault.getMarkdownFiles().filter(f=>!this.settings.root||f.path.startsWith(this.settings.root+'/'));}
+  async openVisible(file,state={}){
+    const w=this.app.workspace,leaf=w.getLeaf(false);
+    await leaf.openFile(file,{active:true,...state});
+    if(w.revealLeaf)await w.revealLeaf(leaf);
+    if(Platform?.isMobileApp){w.leftSplit?.collapse?.();w.rightSplit?.collapse?.();}
+  }
   async openLinked(user,key){
     const tag=marker(user,{key}),matches=[];
     for(const f of this.syncFiles())if((await this.app.vault.cachedRead(f)).includes(tag))matches.push(f);
     if(matches.length!==1)throw Error(matches.length?'发现重复关联，请先整理笔记':'当前笔记库尚未找到关联，请打开正确的库并完成 Git Pull 后重试');
-    await this.app.workspace.getLeaf(false).openFile(matches[0]);
+    const text=await this.app.vault.cachedRead(matches[0]);
+    await this.openVisible(matches[0],{eState:{line:text.slice(0,text.indexOf(tag)).split('\n').length-1}});
   }
   async openAnnotation(k){
     if(!this.cloud){new Connect(this,()=>this.openAnnotation(k)).open();return;}
@@ -132,12 +139,14 @@ module.exports=class MobileBridge extends Plugin {
     }
     // Carry identity inside the synced note; do not depend on device-specific paths.
     await vault.process(file,text=>text.includes(tag)?text:text+'\n\n'+tag+'\n');
+    // Show the saved note before any cloud request; cloud failure must not hide it.
+    if(options?.onLocalSaved)await options.onLocalSaved(file);
     if(!reverse)return {file,ok:true,message:'已建立本地关联，可从笔记返回 Zotero PDF'};
     try{
       const id=tag+file.path;
       if(!this.writeTokens.has(id))this.writeTokens.set(id,globalThis.crypto.randomUUID().replace(/-/g,''));
       await cloud.backlink(a,vault.getName(),file.path,this.writeTokens.get(id));
       return {file,ok:true,message:'双向关联已建立；请在 Zotero 同步后打开父文献下的知识桥笔记'};
-    }catch(e){return {file,ok:false,message:'本地关联已保存：'+file.path+'。Zotero 返回链接尚未确认：'+e.message+'。再次点击“建立关联”会复用本地笔记。'};}
+    }catch(e){return {file,ok:false,message:'笔记已保存并保留：'+file.path+'。Zotero 返回链接未完成：'+e.message+'。修复连接后再次选择同一批注即可重试，不会重复创建。'};}
   }
 };
